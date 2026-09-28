@@ -10,6 +10,29 @@ Persönliches Trading-Journal als **eine einzige HTML-Datei** – öffnen, losle
 
 Daten aus der Vorversion (`journal:trades`, `journal:plan`, `journal:mindset`, `journal:settings`) werden automatisch übernommen. Das bisherige Startkapital wird zum „Hauptkonto“.
 
+## Auf mehreren Geräten nutzen (Sync)
+
+TradeTracer synchronisiert PC, Handy und Tablet über ein **geheimes GitHub Gist** in deinem eigenen GitHub-Konto – ohne fremden Server.
+
+**1. App online stellen (einmalig, damit sie auch auf dem Handy läuft)**
+GitHub → Repo *TRADETRACER* → **Settings → Pages** → „Deploy from a branch“ → Branch wählen, Ordner `/ (root)` → Save.
+Nach ~1 Minute läuft die App unter `https://matsdenninger-ui.github.io/TRADETRACER/`. Auf dem iPhone in Safari: Teilen → „Zum Home-Bildschirm“.
+
+**2. Token erstellen (einmalig)**
+[github.com/settings/tokens/new](https://github.com/settings/tokens/new?scopes=gist&description=TradeTracer%20Sync) → nur **gist** anhaken → „Generate token“ → kopieren.
+
+**3. Auf jedem Gerät verbinden**
+Einstellungen (Zahnrad) → **Geräte-Sync** → Token einfügen → „Verbinden“. Das erste Gerät legt das Gist an, alle weiteren finden es automatisch.
+
+So funktioniert der Abgleich:
+- Beim Öffnen, bei jeder Änderung, beim Zurückkehren in die App und jede Minute.
+- Trades, Konten und Mindset-Einträge werden **einzeln** zusammengeführt (neuester Stand gewinnt), Löschungen werden an alle Geräte weitergegeben – offline erfasste Trades gehen nicht verloren.
+- Screenshots werden mit übertragen.
+- Nur pro Gerät bleiben: aktives Konto, Privatsphäre-Modus, animierter Hintergrund und der Token selbst.
+- Das Wolken-Symbol im Header zeigt den Status (grün = synchron, rot = Fehler). Ein Klick synchronisiert sofort.
+
+> Ein „geheimes“ Gist ist nicht öffentlich auffindbar, aber nicht verschlüsselt: Wer den genauen Link kennt, kann es lesen. Teile den Link und den Token mit niemandem.
+
 ## Premium-Funktionen (angelehnt an SuperTrader PRO)
 
 | Funktion | Wo |
