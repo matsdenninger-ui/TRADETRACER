@@ -13,9 +13,14 @@ Daten aus älteren Versionen werden automatisch übernommen.
 
 ## Einrichtung (einmalig)
 
-### 1. App online stellen – GitHub Pages
+### 1. App online stellen – Vercel oder GitHub Pages
+**Vercel** (bereits verbunden): baut automatisch bei jedem Push. Die `vercel.json` sorgt dafür, dass die fertigen Dateien direkt ausgeliefert werden (kein Build auf Vercel nötig). Die Adresse findest du im Vercel-Dashboard unter *Domains*.
+
+**Alternativ GitHub Pages:**
 GitHub → Repo **TRADETRACER** → **Settings → Pages** → „Deploy from a branch“ → Branch wählen, Ordner `/ (root)` → **Save**.
 Nach ~1 Minute läuft die App unter `https://matsdenninger-ui.github.io/TRADETRACER/`.
+
+Wichtig: Nutze **eine** feste Adresse. Jede Adresse hat ihren eigenen Browser-Speicher – über den Geräte-Sync kommen deine Daten aber auf jede Adresse.
 
 - **iPhone/iPad:** in Safari öffnen → Teilen → **„Zum Home-Bildschirm“**
 - **Android:** in Chrome öffnen → Menü → **„App installieren“**
