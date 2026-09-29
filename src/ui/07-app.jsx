@@ -409,6 +409,26 @@ function App() {
     return { created };
   };
 
+  /* Neuer GitHub-Token für ein bereits verbundenes Gerät – Schlüssel und Gist bleiben,
+     deshalb ist kein Sync-Passwort nötig. */
+  const replaceToken = async (token) => {
+    const t = token.trim();
+    const cfg = syncCfgRef.current;
+    if (!t) throw new Error('Bitte einen Token eingeben.');
+    if (cfg.gistId) {
+      try { await ghApi(`/gists/${cfg.gistId}`, t); }
+      catch (e) {
+        if (/nicht gefunden/.test(e.message)) throw new Error('Mit diesem Token ist dein bisheriger Sync nicht erreichbar. Der Token muss zum selben GitHub-Konto gehören und die Berechtigung „gist“ haben – oder das alte Sync-Gist wurde gelöscht.');
+        throw e;
+      }
+    } else {
+      await ghApi('/gists?per_page=1', t);
+    }
+    updateCfg({ token: t });
+    setSyncState(s => ({ ...s, state: 'idle', error: null }));
+    await runSyncRef.current();
+  };
+
   const unlockSync = async (pass) => {
     const cfg = syncCfgRef.current;
     const r = await keyFromPassphrase(cfg.token, cfg.gistId, pass);
@@ -687,7 +707,7 @@ function App() {
         <SettingsModal settings={settings} accounts={accounts} trades={trades}
           onSave={handleSaveSettings} onClose={() => setShowSettings(false)} onReset={handleReset}
           onExport={handleExportBackup} onImport={handleImportBackup}
-          sync={{ cfg: syncCfg, state: syncState, onConnect: connectSync, onDisconnect: disconnectSync, onUnlock: unlockSync, onSyncNow: () => runSyncRef.current() }} />
+          sync={{ cfg: syncCfg, state: syncState, onConnect: connectSync, onDisconnect: disconnectSync, onUnlock: unlockSync, onReplaceToken: replaceToken, onSyncNow: () => runSyncRef.current() }} />
       )}
 
       {mindsetDate && (

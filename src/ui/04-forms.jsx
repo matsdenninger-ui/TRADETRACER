@@ -583,7 +583,9 @@ function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDu
 /* ---------------------------------------------------------------------- */
 
 function SyncSection({ sync }) {
-  const { cfg, state, onConnect, onDisconnect, onSyncNow, onUnlock } = sync;
+  const { cfg, state, onConnect, onDisconnect, onSyncNow, onUnlock, onReplaceToken } = sync;
+  const [newToken, setNewToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
   const [token, setToken] = useState('');
   const [pass, setPass] = useState('');
   const [pass2, setPass2] = useState('');
@@ -615,7 +617,14 @@ function SyncSection({ sync }) {
     return cfg.encrypted ? 'Entsperrt.' : 'Verschlüsselung aktiv – Daten und Screenshots werden ab jetzt verschlüsselt hochgeladen.';
   });
 
+  const replace = () => run(async () => {
+    await onReplaceToken(newToken);
+    setNewToken(''); setShowToken(false);
+    return 'Neuer Token gespeichert – der Sync läuft wieder.';
+  });
+
   const locked = state.state === 'locked';
+  const tokenBroken = state.state === 'error' && /Token|Zugriff verweigert|nicht gefunden/.test(state.error || '');
   const statusText = {
     ok: `Synchronisiert ${fmtAgo(state.at)}`,
     syncing: 'Synchronisiere …',
@@ -638,6 +647,22 @@ function SyncSection({ sync }) {
             </div>
             <button className="btn-ghost" onClick={onSyncNow} disabled={state.state === 'syncing' || locked}><Icon name="RefreshCw" size={14} className={state.state === 'syncing' ? 'spin' : ''} /> Jetzt</button>
           </div>
+
+          {(tokenBroken || showToken) && (
+            <div className="sync-enc">
+              <p className="shot-hint">{tokenBroken
+                ? 'GitHub akzeptiert den gespeicherten Token nicht mehr (gelöscht, abgelaufen oder ersetzt). Trag hier deinen neuen Token ein – dieses Gerät behält seinen Schlüssel, ein Sync-Passwort ist nicht nötig.'
+                : 'Neuen GitHub-Token für dieses Gerät eintragen. Schlüssel und Daten bleiben erhalten.'}</p>
+              <div className="chip-add">
+                <input type="password" autoComplete="off" placeholder="Neuer GitHub-Token" value={newToken} onChange={e => setNewToken(e.target.value)} aria-label="Neuer GitHub-Token"
+                  onKeyDown={e => { if (e.key === 'Enter' && newToken.trim()) replace(); }} />
+                <button className="btn-primary" disabled={busy || !newToken.trim()} onClick={replace}>{busy ? 'Prüfe …' : 'Token speichern'}</button>
+              </div>
+            </div>
+          )}
+          {!tokenBroken && !showToken && (
+            <button className="link-btn" style={{ alignSelf: 'flex-start' }} onClick={() => setShowToken(true)}>Neuen GitHub-Token eintragen</button>
+          )}
 
           {(locked || (!cfg.keyB64 && showEnc)) && (
             <div className="sync-enc">
