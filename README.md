@@ -35,7 +35,9 @@ Danach startet TradeTracer auch ohne Internet. Neue Versionen werden automatisch
 
 So funktioniert es:
 - Daten liegen in einem **geheimen Gist** in deinem GitHub-Konto, mit AES-256 verschlüsselt. Den Schlüssel erzeugt die App aus deinem Sync-Passwort; das Passwort verlässt nie das Gerät. Ohne Passwort ist das Gist nur Zeichensalat – auch für jemanden mit Link oder Token.
-- **Passwort vergessen?** Die Daten im Gist sind dann nicht mehr lesbar. Deine Geräte behalten ihre Daten; trenne den Sync, lösche das Gist „tradetracer-data.json“ auf gist.github.com und verbinde neu.
+- **Passwort ändern:** Auf einem Gerät, das noch synchronisiert: Zahnrad → Geräte-Sync → **„Sync-Passwort ändern“**. Alles wird mit dem neuen Passwort neu verschlüsselt; die anderen Geräte melden „gesperrt“ und brauchen einmal das neue Passwort.
+- **Passwort vergessen?** Solange ein Gerät noch verbunden ist, dort einfach ein neues Passwort setzen (siehe oben) – das alte wird nicht gebraucht. Ist kein Gerät mehr verbunden, sind die Daten im Gist nicht mehr lesbar; deine Geräte behalten aber ihre Daten: Sync trennen, das Gist „tradetracer-data.json“ auf gist.github.com löschen und neu verbinden.
+- **Neuer GitHub-Token?** Zahnrad → Geräte-Sync → „Neuen GitHub-Token eintragen“ – das Passwort bleibt gleich.
 - Jeder Trade wird einzeln abgeglichen (neuester Stand gewinnt), Löschungen werden weitergegeben, offline erfasste Trades gehen nicht verloren.
 - **Screenshots** liegen je in einem eigenen geheimen Gist („TradeTracer Screenshot …“ – bitte nicht löschen) und werden auf anderen Geräten erst geladen, wenn du sie ansiehst.
 - Auf dem Gerät bleiben: Token, Schlüssel, aktives Konto, Privatsphäre-Modus, Design und Hintergrund-Animation.

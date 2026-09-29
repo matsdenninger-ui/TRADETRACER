@@ -287,9 +287,9 @@ function App() {
 
   const runSync = async () => {
     const cfg = syncCfgRef.current;
-    if (!cfg?.enabled || !cfg.token) return;
-    if (syncBusyRef.current) { syncAgainRef.current = true; return; }
-    if (!navigator.onLine) { setSyncState(s => ({ ...s, state: 'offline' })); return; }
+    if (!cfg?.enabled || !cfg.token) return false;
+    if (syncBusyRef.current) { syncAgainRef.current = true; return false; }
+    if (!navigator.onLine) { setSyncState(s => ({ ...s, state: 'offline' })); return false; }
     syncBusyRef.current = true;
     setSyncState(s => ({ ...s, state: 'syncing', error: null }));
     try {
@@ -299,6 +299,11 @@ function App() {
       const gist = await ghApi(`/gists/${gistId}`, cfg.token);
       const rawRemote = await gistFileContent(gist.files?.[GIST_FILE]);
       if (isSealed(rawRemote) && !cfg.encrypted) updateCfg({ encrypted: true });
+      if (key && cfg.salt && isSealed(rawRemote) && JSON.parse(rawRemote).enc.salt !== cfg.salt) {
+        const err = new Error('Das Sync-Passwort wurde auf einem anderen Gerät geändert – bitte gib das neue Passwort ein.');
+        err.code = 'LOCKED';
+        throw err;
+      }
       const remote = await openPayload(rawRemote, key); // wirft LOCKED, wenn verschlüsselt und kein Passwort
 
       // Zusammenführen – danach nochmals mit dem allerneuesten lokalen Stand,
@@ -314,19 +319,20 @@ function App() {
         if (images[id]) continue;
         let v = await window.imageStore.get(id);
         if (!v) { v = await gistFileContent(gist.files[f]); if (v) await window.imageStore.set(id, v); }
-        if (v) images[id] = { ...(await uploadImageGist(cfg.token, id, v, key)), _u: Date.now() };
+        if (v) images[id] = { ...(await uploadImageGist(cfg.token, id, v, key)), ...(key ? { salt: cfg.salt } : {}), _u: Date.now() };
       }
 
       // Screenshots: neue hochladen, unverschlüsselte neu verschlüsseln, verwaiste löschen
       const referenced = new Set(merged.trades.flatMap(t => t.screenshots || []));
       for (const id of referenced) {
         const entry = images[id];
-        if (entry && !entry.deleted && (!key || entry.enc)) continue;
+        // überspringen, wenn schon mit dem aktuellen Schlüssel hochgeladen
+        if (entry && !entry.deleted && (!key || (entry.enc && (entry.salt || cfg.salt) === cfg.salt))) continue;
         const v = await window.imageStore.get(id);
         if (!v) continue; // liegt nur auf einem anderen Gerät – wird dort hochgeladen
         const up = await uploadImageGist(cfg.token, id, v, key);
         if (entry?.gist && !entry.deleted) await deleteImageGist(cfg.token, entry.gist);
-        images[id] = { ...up, _u: Date.now() };
+        images[id] = { ...up, ...(key ? { salt: cfg.salt } : {}), _u: Date.now() };
       }
       for (const [id, entry] of Object.entries(images)) {
         if (referenced.has(id) || entry.deleted) continue;
@@ -347,10 +353,12 @@ function App() {
       const at = Date.now();
       updateCfg({ lastSync: at, encrypted: !!key || !!cfg.encrypted });
       setSyncState({ state: 'ok', at, error: null });
+      return true;
     } catch (e) {
       console.error('Sync fehlgeschlagen', e);
       setSyncState(s => ({ ...s, state: e.code === 'LOCKED' ? 'locked' : 'error', error: e.message || String(e) }));
       if (e.code === 'LOCKED') updateCfg({ encrypted: true });
+      return false;
     } finally {
       syncBusyRef.current = false;
       if (syncAgainRef.current) { syncAgainRef.current = false; scheduleSync(500); }
@@ -427,6 +435,43 @@ function App() {
     updateCfg({ token: t });
     setSyncState(s => ({ ...s, state: 'idle', error: null }));
     await runSyncRef.current();
+  };
+
+  /* Neues Sync-Passwort: auf einem Gerät, das den Schlüssel noch hat. Alle Daten und
+     Screenshots werden mit dem neuen Schlüssel neu verschlüsselt; andere Geräte melden
+     danach "gesperrt" und brauchen einmal das neue Passwort. */
+  const changeSyncPassword = async (pass) => {
+    if (!syncCfgRef.current?.enabled || !syncCfgRef.current.keyB64) throw new Error('Dieses Gerät ist nicht verschlüsselt verbunden.');
+    while (syncBusyRef.current) await new Promise(r => setTimeout(r, 200));
+    if (!(await runSyncRef.current())) throw new Error('Der Sync läuft gerade nicht – bitte zuerst den angezeigten Fehler beheben (z.B. neuen Token eintragen).');
+    syncBusyRef.current = true;
+    try {
+      const cfg = syncCfgRef.current;
+      const oldKey = await getKey();
+      // Screenshots, die nur auf anderen Geräten liegen, vorher herunterladen – sonst wären sie danach unlesbar
+      const idx = { ...imagesRef.current };
+      let missing = 0;
+      for (const [id, entry] of Object.entries(idx)) {
+        if (entry.deleted) continue;
+        if (!(await window.imageStore.get(id))) {
+          try { const v = await downloadImageGist(cfg.token, entry, id, oldKey); if (v) { await window.imageStore.set(id, v); imageCache.set(id, v); } }
+          catch (e) { missing++; }
+        }
+        idx[id] = { ...entry, salt: entry.salt || cfg.salt };
+      }
+      imagesRef.current = idx; save(IMAGES_INDEX_KEY, idx);
+      const salt = newSalt();
+      const key = await deriveSyncKey(pass, salt);
+      const snap = localSnapshot();
+      const body = { app: 'TradeTracer', version: 3, ...mergeSnapshots(snap, snap), syncedAt: new Date().toISOString() };
+      await ghApi(`/gists/${cfg.gistId}`, cfg.token, { method: 'PATCH', body: { files: { [GIST_FILE]: { content: await sealPayload(body, key, salt) } } } });
+      keyRef.current = null;
+      updateCfg({ keyB64: await exportSyncKey(key), salt, encrypted: true });
+      if (missing) console.warn(`${missing} Screenshots konnten nicht übernommen werden`);
+    } finally {
+      syncBusyRef.current = false;
+    }
+    await runSyncRef.current(); // Screenshots mit dem neuen Schlüssel neu hochladen
   };
 
   const unlockSync = async (pass) => {
@@ -707,7 +752,7 @@ function App() {
         <SettingsModal settings={settings} accounts={accounts} trades={trades}
           onSave={handleSaveSettings} onClose={() => setShowSettings(false)} onReset={handleReset}
           onExport={handleExportBackup} onImport={handleImportBackup}
-          sync={{ cfg: syncCfg, state: syncState, onConnect: connectSync, onDisconnect: disconnectSync, onUnlock: unlockSync, onReplaceToken: replaceToken, onSyncNow: () => runSyncRef.current() }} />
+          sync={{ cfg: syncCfg, state: syncState, onConnect: connectSync, onDisconnect: disconnectSync, onUnlock: unlockSync, onReplaceToken: replaceToken, onChangePassword: changeSyncPassword, onSyncNow: () => runSyncRef.current() }} />
       )}
 
       {mindsetDate && (

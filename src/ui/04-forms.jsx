@@ -583,7 +583,8 @@ function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDu
 /* ---------------------------------------------------------------------- */
 
 function SyncSection({ sync }) {
-  const { cfg, state, onConnect, onDisconnect, onSyncNow, onUnlock, onReplaceToken } = sync;
+  const { cfg, state, onConnect, onDisconnect, onSyncNow, onUnlock, onReplaceToken, onChangePassword } = sync;
+  const [showChange, setShowChange] = useState(false);
   const [newToken, setNewToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [token, setToken] = useState('');
@@ -621,6 +622,14 @@ function SyncSection({ sync }) {
     await onReplaceToken(newToken);
     setNewToken(''); setShowToken(false);
     return 'Neuer Token gespeichert – der Sync läuft wieder.';
+  });
+
+  const changePw = () => run(async () => {
+    if (pass !== pass2) throw new Error('Die beiden Passwörter stimmen nicht überein.');
+    if (pass.length < 10) throw new Error('Bitte mindestens 10 Zeichen – am besten ein Satz, den du dir merken kannst.');
+    await onChangePassword(pass);
+    setPass(''); setPass2(''); setShowChange(false);
+    return 'Neues Sync-Passwort aktiv. Auf deinen anderen Geräten einmal das neue Passwort eingeben (Zahnrad → Geräte-Sync).';
   });
 
   const locked = state.state === 'locked';
@@ -667,7 +676,7 @@ function SyncSection({ sync }) {
           {(locked || (!cfg.keyB64 && showEnc)) && (
             <div className="sync-enc">
               <p className="shot-hint">{locked
-                ? 'Deine Sync-Daten sind verschlüsselt. Gib das Sync-Passwort ein, das du auf deinem ersten Gerät festgelegt hast.'
+                ? (/geändert/.test(state.error || '') ? state.error + ' Deine Trades auf diesem Gerät bleiben erhalten.' : 'Deine Sync-Daten sind verschlüsselt. Gib das Sync-Passwort ein, das du auf deinem ersten Gerät festgelegt hast.')
                 : 'Lege ein Sync-Passwort fest. Ohne dieses Passwort kann niemand deine Daten im Gist lesen – auch nicht mit dem Token. Wenn du es vergisst, sind die Daten im Gist verloren (die Daten auf deinen Geräten bleiben erhalten).'}</p>
               <input type="password" autoComplete={locked ? 'current-password' : 'new-password'} placeholder="Sync-Passwort" value={pass} onChange={e => setPass(e.target.value)} />
               {!locked && <input type="password" autoComplete="new-password" placeholder="Passwort wiederholen" value={pass2} onChange={e => setPass2(e.target.value)} />}
@@ -677,6 +686,21 @@ function SyncSection({ sync }) {
           {!cfg.keyB64 && !locked && !showEnc && (
             <button className="btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowEnc(true)}><Icon name="Lock" size={14} /> Ende-zu-Ende-Verschlüsselung aktivieren (empfohlen)</button>
           )}
+
+          {cfg.keyB64 && !locked && (showChange ? (
+            <form className="sync-enc" onSubmit={e => { e.preventDefault(); changePw(); }}>
+              <p className="shot-hint">Neues Sync-Passwort festlegen. Das alte Passwort brauchst du dafür nicht. Speichere das neue am besten gleich in deinem Passwort-Manager – die App kann es nicht wiederherstellen.</p>
+              <input type="text" name="username" autoComplete="username" value="TradeTracer Sync" readOnly hidden />
+              <input type="password" name="new-password" autoComplete="new-password" placeholder="Neues Sync-Passwort" value={pass} onChange={e => setPass(e.target.value)} aria-label="Neues Sync-Passwort" />
+              <input type="password" name="new-password-repeat" autoComplete="new-password" placeholder="Neues Passwort wiederholen" value={pass2} onChange={e => setPass2(e.target.value)} aria-label="Neues Sync-Passwort wiederholen" />
+              <div className="backup-actions">
+                <button type="submit" className="btn-primary" disabled={busy || !pass}>{busy ? 'Verschlüssle neu …' : 'Passwort ändern'}</button>
+                <button type="button" className="btn-ghost" onClick={() => { setShowChange(false); setPass(''); setPass2(''); }}>Abbrechen</button>
+              </div>
+            </form>
+          ) : (
+            <button className="btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowChange(true)}><Icon name="Lock" size={14} /> Sync-Passwort ändern</button>
+          ))}
 
           {!confirmOff ? (
             <button className="btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setConfirmOff(true)}><Icon name="CloudOff" size={14} /> Sync auf diesem Gerät trennen</button>
