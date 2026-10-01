@@ -1,6 +1,6 @@
 // Service Worker: macht TradeTracer offline startfähig.
 // Wird von build.mjs erzeugt – Änderungen bitte in src/sw.template.js.
-const VERSION = '845c62f052';
+const VERSION = '582c719f9e';
 const CACHE = `tradetracer-${VERSION}`;
 const RUNTIME = 'tradetracer-runtime';
 const PRECACHE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './vendor/xlsx.full.min.js'];

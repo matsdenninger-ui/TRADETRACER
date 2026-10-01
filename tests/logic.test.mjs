@@ -195,3 +195,39 @@ test('KI-Prompt enthält Trades, aber keine offenen Positionen', () => {
   assert.ok(text.includes('Zu früh rein'));
   assert.ok(!text.includes('OPEN'));
 });
+
+test('MetaTrader-5-Kontobericht: Positionen mit exaktem Broker-Ergebnis', () => {
+  const aoa = [
+    ['Bericht der Kontohistorie'],
+    ['Name:', '', '', 'MT5'],
+    ['Konto:', '', '', '123456 (EUR, Broker-Live 1, real, Hedge)'],
+    ['Firma:', '', '', 'Beispiel Markets (Pty) Ltd'],
+    ['Positionen'],
+    ['Zeit', 'Position', 'Symbol', 'Typ', 'Volumen', 'Preis', 'S / L', 'T / P', 'Zeit', 'Preis', 'Kommission', 'Swap', 'Gewinn'],
+    ['2026.03.31 12:34:14', '1001', 'XAUUSD', 'buy', '0.01', '4 556.27', '4 548.00', '4 563.00', '2026.03.31 13:10:23', '4 559.94', '0.00', '0.00', ' 3.20'],
+    ['2026.03.31 14:22:04', '1002', 'XAUUSD', 'sell', '0.05', '4 572.63', '4 583.80', '', '2026.04.01 01:01:00', '4 584.81', '- 0.50', '- 3.85', '- 53.07'],
+    ['2026.03.31 15:00:00', '1003', 'XAUUSD', 'buy', '0.02', '4 570.00', '', '', '2026.03.31 15:01:00', '4 570.00', '0.00', '0.00', '- 0.40'],
+    ['Orders'],
+    ['Eröffnungszeit', 'Auftrag', 'Symbol', 'Typ', 'Volumen', 'Preis'],
+    ['2026.03.31 12:34:14', '1001', 'XAUUSD', 'buy', '0.01 / 0.01', 'market'],
+    ['Trades'],
+    ['Zeit', 'Trade', 'Symbol', 'Typ', 'Richtung', 'Volumen', 'Preis', 'Auftrag', 'Kommission', 'Kosten', 'Swap', 'Gewinn', 'Kontostand', 'Kommentar'],
+    ['2026.03.31 09:46:43', '5', '', 'balance', '', '', '', '', '0.00', '0.00', '0.00', '1 000.00', '1 000.00', 'Deposit']
+  ];
+  const r = L.parseMt5Report(aoa);
+  assert.equal(r.trades.length, 3);
+  assert.equal(r.meta.currency, '€');
+  assert.equal(r.meta.accountNo, '123456');
+  assert.equal(r.meta.netDeposits, 1000);
+  assert.equal(r.summary.net, -54.62);
+  const [a, b, c] = r.trades;
+  assert.equal(a.id, 'mt5_1001');
+  assert.equal(a.date, '2026-03-31');
+  assert.equal(a.time, '12:34');
+  assert.equal(b.direction, 'short');
+  assert.equal(b.exitDate, '2026-04-01');
+  assert.ok(Math.abs(L.calcPnL(a) - 3.2) < 0.001);
+  assert.ok(Math.abs(L.calcPnL(b) - (-53.07 - 0.5 - 3.85)) < 0.001);
+  assert.ok(Math.abs(L.calcPnL(c) - (-0.4)) < 0.001);
+  assert.equal(L.parseMt5Report([['Datum', 'Symbol'], ['2026-01-01', 'AAPL']]), null);
+});

@@ -15,7 +15,7 @@ const EXPORTS = [
   'mergeSnapshots', 'mergeRecords', 'mergeStampedMaps',
   'deriveSyncKey', 'exportSyncKey', 'importSyncKey', 'encryptText', 'decryptText', 'sealPayload', 'openPayload', 'newSalt', 'isSealed',
   'parseImportNumber', 'parseImportDate', 'parseImportTime', 'guessImportMapping', 'buildTradesFromImportRows',
-  'computeInsights', 'computeTraderScore', 'buildReviewPrompt', 'setPrivacy', 'fmtMoney'
+  'parseMt5Report', 'computeInsights', 'computeTraderScore', 'buildReviewPrompt', 'setPrivacy', 'fmtMoney'
 ];
 
 export function loadLogic() {

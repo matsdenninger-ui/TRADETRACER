@@ -661,7 +661,11 @@ function App() {
     if (data.images) for (const [id, v] of Object.entries(data.images)) { await window.imageStore.set(id, v); imageCache.set(id, v); }
   };
 
-  const handleImportTrades = (newTrades) => persistTrades([...trades, ...newTrades]);
+  const handleImportTrades = (newTrades, newAccount) => {
+    if (newAccount) persistAccounts([...accountsRef.current, newAccount]);
+    const have = new Set(tradesRef.current.map(t => t.id));
+    persistTrades([...tradesRef.current, ...newTrades.filter(t => !have.has(t.id))]);
+  };
 
   const handleReset = async () => {
     persistTrades([]);
@@ -776,7 +780,7 @@ function App() {
           onSave={handleSaveTrade} onClose={() => setModalTrade(undefined)} />
       )}
 
-      {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={handleImportTrades} accounts={accounts} defaultAccountId={defaultAccountId} />}
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={handleImportTrades} accounts={accounts} defaultAccountId={defaultAccountId} existingIds={new Set(trades.map(t => t.id))} />}
 
       {showReport && (
         <ReportModal onClose={() => setShowReport(false)} trades={realizedTrades} mindset={mindset} plan={plan} currency={currency}

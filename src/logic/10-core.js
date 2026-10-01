@@ -441,7 +441,7 @@ function parseImportDate(v) {
     return isNaN(d) ? null : d.toISOString().slice(0, 10);
   }
   const s = String(v).trim();
-  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  let m = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/.exec(s); // auch MetaTrader: 2026.03.31
   if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
   m = /^(\d{1,2})[./](\d{1,2})[./](\d{4})/.exec(s);
   if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;

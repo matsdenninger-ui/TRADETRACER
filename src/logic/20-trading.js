@@ -272,3 +272,128 @@ function dailyLimitStatus(trades, plan, dateISO, accountId) {
   const countHit = plan.maxTradesPerDay > 0 && list.length >= plan.maxTradesPerDay;
   return { loss, count: list.length, lossHit, countHit, locked: !!plan.hardLock && (lossHit || countHit) };
 }
+
+/* ---------------------------------------------------------------------- */
+/* MetaTrader-5-Kontobericht ("Bericht der Kontohistorie" / "Trade History */
+/* Report", z.B. Vantage, IC Markets, Pepperstone). Jede Zeile im Abschnitt */
+/* "Positionen" ist ein kompletter Trade. Der Gewinn steht dort schon in    */
+/* Kontowährung – daraus wird der Punktwert je Trade abgeleitet, damit      */
+/* Gewinn, Risiko und R-Multiple exakt zum Broker passen.                   */
+/* ---------------------------------------------------------------------- */
+
+const ISO_CURRENCY_SYMBOLS = { EUR: '€', USD: '$', GBP: '£', JPY: '¥', CHF: 'CHF', AUD: 'A$', CAD: 'C$' };
+
+function parseMt5Report(aoa) {
+  const txt = (v) => String(v ?? '').trim();
+  const filled = (r) => (r || []).filter(c => txt(c) !== '').length;
+  const posIdx = aoa.findIndex(r => ['positionen', 'positions'].includes(txt(r?.[0]).toLowerCase()) && filled(r) === 1);
+  if (posIdx < 0) return null;
+  const hdr = (aoa[posIdx + 1] || []).map(h => txt(h).toLowerCase().replace(/\s+/g, ' '));
+  const find = (names, from = 0) => hdr.findIndex((h, i) => i >= from && names.includes(h));
+  const c = { openTime: find(['zeit', 'time']), id: find(['position']), symbol: find(['symbol']), type: find(['typ', 'type']), vol: find(['volumen', 'volume']), sl: find(['s / l', 's/l']), tp: find(['t / p', 't/p']) };
+  c.openPrice = find(['preis', 'price'], c.vol + 1);
+  c.closeTime = find(['zeit', 'time'], c.openTime + 1);
+  c.closePrice = find(['preis', 'price'], c.closeTime + 1);
+  c.comm = find(['kommission', 'commission']);
+  c.swap = find(['swap']);
+  c.profit = find(['gewinn', 'profit']);
+  if (['openTime', 'id', 'symbol', 'type', 'vol', 'openPrice', 'profit'].some(k => c[k] < 0)) return null;
+
+  // Kopfdaten: "Konto: 27083016 (EUR, VantageMarkets-Live 6, real, Hedge)"
+  const meta = {};
+  aoa.slice(0, posIdx).forEach(r => {
+    const label = txt(r?.[0]).toLowerCase().replace(/:$/, '');
+    const value = (r || []).slice(1).map(txt).find(Boolean) || '';
+    if (['konto', 'account'].includes(label)) meta.account = value;
+    if (['firma', 'company'].includes(label)) meta.company = value;
+    if (['name'].includes(label)) meta.name = value;
+  });
+  const am = /^(\d+)\s*\(([A-Z]{3})(?:,\s*([^,)]+))?/.exec(meta.account || '');
+  if (am) { meta.accountNo = am[1]; meta.currencyCode = am[2]; meta.server = am[3] || ''; }
+  meta.currency = meta.currencyCode ? (ISO_CURRENCY_SYMBOLS[meta.currencyCode] || meta.currencyCode) : null;
+  meta.broker = (meta.company || meta.server || 'MetaTrader').replace(/\s*\((Pty|PTY)\)\s*/g, ' ').replace(/\s+(Ltd|Limited|LLC|Inc)\.?$/i, '').trim();
+
+  // Ein- minus Auszahlungen aus dem Abschnitt "Trades"/"Deals" als Startkapital (Bonus-Credits zählen nicht)
+  const dealHdrIdx = aoa.findIndex((r, i) => i > posIdx && (r || []).map(x => txt(x).toLowerCase()).some(h => h === 'kontostand' || h === 'balance') && (r || []).some(x => ['richtung', 'direction'].includes(txt(x).toLowerCase())));
+  if (dealHdrIdx >= 0) {
+    const dh = aoa[dealHdrIdx].map(x => txt(x).toLowerCase());
+    const pCol = dh.findIndex(h => h === 'gewinn' || h === 'profit');
+    const tCol = dh.findIndex(h => h === 'typ' || h === 'type');
+    let deposits = 0, found = false;
+    for (const r of aoa.slice(dealHdrIdx + 1)) {
+      if (filled(r) <= 1) break;
+      if (txt(r?.[tCol]).toLowerCase() === 'balance') { deposits += parseImportNumber(r?.[pCol]) || 0; found = true; }
+    }
+    if (found) meta.netDeposits = Math.round(deposits * 100) / 100;
+  }
+
+  const raw = [], errors = [];
+  for (let i = posIdx + 2; i < aoa.length; i++) {
+    const r = aoa[i] || [];
+    if (filled(r) <= 1) break; // nächster Abschnitt oder Leerzeile
+    const pos = txt(r[c.id]);
+    const date = parseImportDate(r[c.openTime]);
+    const qty = parseImportNumber(r[c.vol]);
+    const entry = parseImportNumber(r[c.openPrice]);
+    const type = txt(r[c.type]).toLowerCase();
+    if (!/^\d+$/.test(pos) || !date || !qty || entry == null || !/buy|sell/.test(type)) {
+      errors.push(`Zeile ${i + 1}: keine vollständige Position – übersprungen.`);
+      continue;
+    }
+    const closed = c.closeTime >= 0 && txt(r[c.closeTime]) !== '';
+    raw.push({
+      pos, date, time: parseImportTime(r[c.openTime]),
+      exitDate: closed ? parseImportDate(r[c.closeTime]) : '', exitTime: closed ? parseImportTime(r[c.closeTime]) : '',
+      symbol: txt(r[c.symbol]).toUpperCase(), direction: type.includes('sell') ? 'short' : 'long',
+      qty, entry, exit: closed ? parseImportNumber(r[c.closePrice]) : null,
+      sl: parseImportNumber(r[c.sl]) || null, tp: parseImportNumber(r[c.tp]) || null,
+      commission: parseImportNumber(r[c.comm]) || 0, swap: parseImportNumber(r[c.swap]) || 0, profit: parseImportNumber(r[c.profit]) || 0
+    });
+  }
+  if (!raw.length) return null;
+
+  // Punktwert je Symbol (Kontowährung pro Preispunkt und Lot), aus den Trades selbst ermittelt
+  const unitMove = (x) => (x.direction === 'long' ? x.exit - x.entry : x.entry - x.exit) * x.qty;
+  const bySymbol = {};
+  raw.forEach(x => {
+    if (x.exit == null) return;
+    const mv = unitMove(x);
+    if (Math.abs(mv) > 1e-9 && x.profit !== 0 && x.profit / mv > 0) (bySymbol[x.symbol] = bySymbol[x.symbol] || []).push(x.profit / mv);
+  });
+  const median = (a) => { const s = [...a].sort((p, q) => p - q); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  const symbolMult = Object.fromEntries(Object.entries(bySymbol).map(([k, v]) => [k, median(v)]));
+
+  const round = (n, d) => Math.round(n * 10 ** d) / 10 ** d;
+  const trades = raw.map((x, i) => {
+    let mult = symbolMult[x.symbol] || 1;
+    let fees = -(x.commission + x.swap);
+    if (x.exit != null) {
+      const mv = unitMove(x);
+      if (Math.abs(mv) > 1e-9 && x.profit !== 0 && x.profit / mv > 0) mult = x.profit / mv;
+      // Rest (Rundung, Kursdifferenz 0) in die Gebühren, damit das Ergebnis exakt dem Broker entspricht
+      mult = Number(mult.toPrecision(8));
+      fees += mv * mult - x.profit;
+    }
+    return normalizeTrade({
+      id: `mt5_${x.pos}`, brokerRef: x.pos,
+      date: x.date, time: x.time, exitDate: x.exitDate, exitTime: x.exitTime,
+      symbol: x.symbol, direction: x.direction,
+      entryPrice: x.entry, exitPrice: x.exit, quantity: x.qty,
+      stopLoss: x.sl, takeProfit: x.tp,
+      fees: round(fees, 4), multiplier: mult,
+      createdAt: Date.now() + i
+    });
+  });
+
+  const closedTrades = trades.filter(t => hasExit(t));
+  const dates = trades.map(t => t.date).sort();
+  return {
+    meta, trades, errors,
+    summary: {
+      count: trades.length, open: trades.length - closedTrades.length,
+      net: round(raw.reduce((s, x) => s + x.profit + x.commission + x.swap, 0), 2),
+      from: dates[0], to: dates[dates.length - 1],
+      symbols: Object.entries(raw.reduce((m, x) => { m[x.symbol] = (m[x.symbol] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1])
+    }
+  };
+}

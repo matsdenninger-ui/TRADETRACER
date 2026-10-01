@@ -1052,7 +1052,7 @@ function MindsetCard({ entry, onChange, streak, date }) {
 /* (Kauf/Verkauf je Zeile, z.B. Broker-Export) → FIFO-Zusammenführung.     */
 /* ---------------------------------------------------------------------- */
 
-function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
+function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingIds = new Set() }) {
   const [step, setStep] = useState('upload');
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState([]);
@@ -1065,6 +1065,7 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [accountId, setAccountId] = useState(defaultAccountId);
+  const [report, setReport] = useState(null); // erkannter MetaTrader-Kontobericht
   const fileInputRef = useRef(null);
   const dialogRef = useDialog(onClose);
 
@@ -1103,6 +1104,16 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
       const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+      // MetaTrader-5-Kontobericht (z.B. Vantage) – wird komplett automatisch gelesen
+      const mt = parseMt5Report(aoa);
+      if (mt) {
+        setReport(mt); setMode('report');
+        const match = accounts.find(a => mt.meta.accountNo && String(a.name || '').includes(mt.meta.accountNo));
+        setAccountId(match ? match.id : '__new');
+        setStep('map'); setBusy(false);
+        return;
+      }
+      setReport(null);
       // Kopfzeile = erste Zeile mit mindestens 3 ausgefüllten Zellen (Broker-Exporte haben oft Vorspann)
       const hIdx = Math.max(0, aoa.findIndex(r => r.filter(c => String(c ?? '').trim() !== '').length >= 3));
       const headerRow = (aoa[hIdx] || []).map(h => String(h ?? '').trim());
@@ -1122,7 +1133,9 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
   };
 
   const fields = mode === 'trades' ? IMPORT_FIELDS : EXEC_FIELDS;
-  const requiredMissing = fields.filter(f => f.required && !(mapping[f.key] >= 0));
+  const requiredMissing = mode === 'report' ? [] : fields.filter(f => f.required && !(mapping[f.key] >= 0));
+  const reportNew = report ? report.trades.filter(t => !existingIds.has(t.id)) : [];
+  const newAccountName = report ? `${report.meta.broker} ${report.meta.accountNo || 'MT5'}`.trim() : '';
 
   const preview = useMemo(() => {
     if (step !== 'map' || mode !== 'execs' || requiredMissing.length) return null;
@@ -1133,6 +1146,18 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
 
   const runImport = () => {
     let trades, errors;
+    if (mode === 'report') {
+      let newAccount = null, target = accountId;
+      if (accountId === '__new') {
+        newAccount = { id: uid('acc'), name: newAccountName, startingBalance: report.meta.netDeposits > 0 ? report.meta.netDeposits : 1000, hue: ACCOUNT_HUES[accounts.length % ACCOUNT_HUES.length], ...(report.meta.currency ? { currency: report.meta.currency } : {}) };
+        target = newAccount.id;
+      }
+      trades = reportNew.map(t => ({ ...t, accountId: target }));
+      if (trades.length > 0 || newAccount) onImport(trades, newAccount);
+      setResult({ imported: trades.length, open: trades.filter(isOpen).length, skipped: 0, duplicates: report.trades.length - trades.length, errors: report.errors.slice(0, 8), account: newAccount?.name });
+      setStep('done');
+      return;
+    }
     if (mode === 'trades') {
       ({ trades, errors } = buildTradesFromImportRows(rows, mapping, accountId));
     } else {
@@ -1162,14 +1187,14 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); } }}>
                 {busy ? <div className="loader" /> : <Icon name="FileSpreadsheet" size={30} strokeWidth={1.4} />}
                 <p><strong>Datei auswählen</strong> oder hierher ziehen</p>
-                <span>.xlsx, .xls oder .csv – eigene Liste oder Broker-Export</span>
-                <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+                <span>.xlsx, .xls, .csv oder .html – eigene Liste, Broker-Export oder MetaTrader-Bericht</span>
+                <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.html,.htm" style={{ display: 'none' }}
                   onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
               </div>
               {parseError && <div className="form-error"><Icon name="AlertTriangle" size={14} /> {parseError}</div>}
               <div className="import-help">
                 <strong>Broker-Exporte</strong>
-                <p>Interactive Brokers (Activity/Flex „Trades“), Binance (Spot-Tradeverlauf), Scalable Capital, Trade Republic und andere Kauf/Verkauf-Listen werden erkannt. Mehrere Käufe und Teilverkäufe werden automatisch zu Trades zusammengefasst (FIFO); was noch nicht verkauft ist, wird als offene Position angelegt.</p>
+                <p><b>MetaTrader 5</b> (z.B. Vantage): Kontobericht im Verlauf per Rechtsklick → „Bericht“ → Excel oder HTML speichern – wird komplett automatisch erkannt. Interactive Brokers (Activity/Flex „Trades“), Binance (Spot-Tradeverlauf), Scalable Capital, Trade Republic und andere Kauf/Verkauf-Listen werden erkannt. Mehrere Käufe und Teilverkäufe werden automatisch zu Trades zusammengefasst (FIFO); was noch nicht verkauft ist, wird als offene Position angelegt.</p>
               </div>
               <div className="backup-actions">
                 <button className="btn-ghost" onClick={() => downloadTemplate('trades')}><Icon name="Download" size={14} /> Vorlage: 1 Zeile = 1 Trade</button>
@@ -1178,7 +1203,43 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
             </>
           )}
 
-          {step === 'map' && (
+          {step === 'map' && mode === 'report' && report && (() => {
+            const acc = accounts.find(a => a.id === accountId);
+            const accCur = acc ? (acc.currency || '') : report.meta.currency;
+            const curMismatch = acc && report.meta.currency && acc.currency && acc.currency !== report.meta.currency;
+            const fmtD = (d) => d ? d.split('-').reverse().join('.') : '';
+            return (
+              <>
+                <div className="insight info">
+                  <div className="insight-icon"><Icon name="FileSpreadsheet" size={16} /></div>
+                  <div>
+                    <p className="insight-title">MetaTrader-5-Kontobericht erkannt</p>
+                    <p className="insight-text">{report.meta.company || report.meta.broker}{report.meta.accountNo ? ` · Konto ${report.meta.accountNo}` : ''}{report.meta.currencyCode ? ` · ${report.meta.currencyCode}` : ''}{report.meta.server ? ` · ${report.meta.server}` : ''}</p>
+                  </div>
+                </div>
+                <div className="kv-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                  <div className="kv"><span>Positionen</span><strong>{report.summary.count}</strong></div>
+                  <div className="kv"><span>Zeitraum</span><strong>{fmtD(report.summary.from)} – {fmtD(report.summary.to)}</strong></div>
+                  <div className="kv"><span>Netto laut Broker</span><strong className={report.summary.net >= 0 ? 'txt-profit' : 'txt-loss'}>{fmtMoneySigned(report.summary.net, report.meta.currency || '')}</strong></div>
+                  <div className="kv"><span>Neu</span><strong>{reportNew.length}{report.trades.length - reportNew.length > 0 ? ` (${report.trades.length - reportNew.length} schon vorhanden)` : ''}</strong></div>
+                </div>
+                <p className="shot-hint">Symbole: {report.summary.symbols.map(([k, n]) => `${k} (${n})`).join(', ')}</p>
+                <div className="form-row">
+                  <label>Importieren in
+                    <select value={accountId} onChange={e => setAccountId(e.target.value)}>
+                      <option value="__new">＋ Neues Konto „{newAccountName}“{report.meta.currency ? ` (${report.meta.currency})` : ''}</option>
+                      {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.currency ? ` (${a.currency})` : ''}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {accountId === '__new' && <p className="shot-hint">Das neue Konto bekommt die Währung {report.meta.currencyCode || '—'} und als Startkapital deine Ein- minus Auszahlungen{report.meta.netDeposits > 0 ? ` (${fmtMoney(report.meta.netDeposits, report.meta.currency || '')})` : ''}, damit der Kontostand zum MetaTrader passt – änderbar unter Einstellungen → Konten.</p>}
+                {curMismatch && <div className="form-warning-box"><div className="form-warning-item"><Icon name="AlertTriangle" size={13} /> Der Bericht ist in {report.meta.currencyCode}, das Konto „{acc.name}“ in {accCur}. Gewinne werden in {report.meta.currencyCode} übernommen.</div></div>}
+                <p className="shot-hint">Gewinne, Swap und Kommission werden exakt wie im MetaTrader übernommen; der Punktwert je Trade wird daraus berechnet. S/L und T/P sind der letzte Stand der Position. Du kannst denselben Bericht später erneut importieren – bereits vorhandene Positionen werden übersprungen.</p>
+              </>
+            );
+          })()}
+
+          {step === 'map' && mode !== 'report' && (
             <>
               <p className="import-summary"><strong>{fileName}</strong> · {rows.length} Zeile{rows.length === 1 ? '' : 'n'} gefunden.</p>
               <div className="seg-control">
@@ -1252,6 +1313,8 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId }) {
             <div className="import-result" role="status">
               <div className="import-result-icon"><Icon name="Check" size={22} /></div>
               <h3>{result.imported} Trade{result.imported === 1 ? '' : 's'} importiert</h3>
+              {result.account && <p>Neues Konto „{result.account}“ angelegt.</p>}
+              {result.duplicates > 0 && <p>{result.duplicates} Position{result.duplicates === 1 ? ' war' : 'en waren'} schon vorhanden und wurde{result.duplicates === 1 ? '' : 'n'} übersprungen.</p>}
               {result.open > 0 && <p>{result.open} offene Position{result.open === 1 ? '' : 'en'} – du findest sie auf der Übersicht.</p>}
               {result.skipped > 0 && <p>{result.skipped} Zeile{result.skipped === 1 ? '' : 'n'} übersprungen.</p>}
               {result.errors.length > 0 && (
