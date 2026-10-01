@@ -583,7 +583,8 @@ function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDu
 /* ---------------------------------------------------------------------- */
 
 function SyncSection({ sync }) {
-  const { cfg, state, onConnect, onDisconnect, onSyncNow, onUnlock, onReplaceToken, onChangePassword } = sync;
+  const { cfg, state, onConnect, onDisconnect, onSyncNow, onUnlock, onReplaceToken, onChangePassword, onReset, tradeCount = 0 } = sync;
+  const [showReset, setShowReset] = useState(false);
   const [showChange, setShowChange] = useState(false);
   const [newToken, setNewToken] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -632,6 +633,31 @@ function SyncSection({ sync }) {
     return 'Neues Sync-Passwort aktiv. Auf deinen anderen Geräten einmal das neue Passwort eingeben (Zahnrad → Geräte-Sync).';
   });
 
+  const doReset = () => run(async () => {
+    if (!cfg?.enabled && !token.trim()) throw new Error('Bitte oben zuerst deinen GitHub-Token eintragen.');
+    if (pass !== pass2) throw new Error('Die beiden Passwörter stimmen nicht überein.');
+    if (pass.length < 10) throw new Error('Bitte mindestens 10 Zeichen – am besten ein Satz, den du dir merken kannst.');
+    await onReset(cfg?.enabled ? null : token, pass);
+    setToken(''); setPass(''); setPass2(''); setShowReset(false);
+    return 'Sync mit neuem Passwort neu gestartet. Auf deinen anderen Geräten: Zahnrad → Geräte-Sync → das neue Passwort eingeben – ihre Trades werden dann wieder zusammengeführt.';
+  });
+
+  const resetBox = showReset ? (
+    <form className="sync-enc" onSubmit={e => { e.preventDefault(); doReset(); }}>
+      <p className="shot-hint"><strong>Neu starten mit neuem Passwort.</strong> Das alte Passwort lässt sich nicht wiederherstellen – auch nicht von GitHub oder der App. Stattdessen wird der Stand <b>dieses Geräts</b> ({tradeCount} Trade{tradeCount === 1 ? '' : 's'}) mit einem neuen Passwort zum neuen Sync-Stand. Deine anderen Geräte behalten ihre Daten: Gib dort danach das neue Passwort ein, dann werden ihre Trades wieder dazugemischt. Nur Screenshots, die auf keinem Gerät mehr liegen, gehen verloren.</p>
+      {tradeCount === 0 && <p className="shot-hint" style={{ color: 'var(--loss)' }}>Achtung: Auf diesem Gerät sind keine Trades. Mach das besser auf dem Gerät, auf dem deine Trades noch zu sehen sind.</p>}
+      <input type="text" name="username" autoComplete="username" value="TradeTracer Sync" readOnly hidden />
+      <input type="password" name="new-password" autoComplete="new-password" placeholder="Neues Sync-Passwort" value={pass} onChange={e => setPass(e.target.value)} aria-label="Neues Sync-Passwort" />
+      <input type="password" name="new-password-repeat" autoComplete="new-password" placeholder="Neues Passwort wiederholen" value={pass2} onChange={e => setPass2(e.target.value)} aria-label="Neues Sync-Passwort wiederholen" />
+      <div className="backup-actions">
+        <button type="submit" className="btn-danger" disabled={busy || !pass}>{busy ? 'Starte neu …' : 'Mit neuem Passwort neu starten'}</button>
+        <button type="button" className="btn-ghost" onClick={() => { setShowReset(false); setPass(''); setPass2(''); }}>Abbrechen</button>
+      </div>
+    </form>
+  ) : (
+    <button type="button" className="link-btn" style={{ alignSelf: 'flex-start' }} onClick={() => { setShowReset(true); setPass(''); setPass2(''); setMsg(null); }}>Passwort vergessen?</button>
+  );
+
   const locked = state.state === 'locked';
   const tokenBroken = state.state === 'error' && /Token|Zugriff verweigert|nicht gefunden/.test(state.error || '');
   const statusText = {
@@ -673,7 +699,7 @@ function SyncSection({ sync }) {
             <button className="link-btn" style={{ alignSelf: 'flex-start' }} onClick={() => setShowToken(true)}>Neuen GitHub-Token eintragen</button>
           )}
 
-          {(locked || (!cfg.keyB64 && showEnc)) && (
+          {((locked && !showReset) || (!cfg.keyB64 && showEnc)) && (
             <div className="sync-enc">
               <p className="shot-hint">{locked
                 ? (/geändert/.test(state.error || '') ? state.error + ' Deine Trades auf diesem Gerät bleiben erhalten.' : 'Deine Sync-Daten sind verschlüsselt. Gib das Sync-Passwort ein, das du auf deinem ersten Gerät festgelegt hast.')
@@ -683,6 +709,7 @@ function SyncSection({ sync }) {
               <button className="btn-primary" style={{ alignSelf: 'flex-start' }} disabled={busy || !pass} onClick={unlock}>{busy ? 'Einen Moment …' : locked ? 'Entsperren' : 'Verschlüsselung aktivieren'}</button>
             </div>
           )}
+          {locked && resetBox}
           {!cfg.keyB64 && !locked && !showEnc && (
             <button className="btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowEnc(true)}><Icon name="Lock" size={14} /> Ende-zu-Ende-Verschlüsselung aktivieren (empfohlen)</button>
           )}
@@ -718,12 +745,15 @@ function SyncSection({ sync }) {
         <>
           <p className="shot-hint">Nutze TradeTracer auf PC, Handy und Tablet mit demselben Stand. Die Daten liegen – verschlüsselt – in einem geheimen Gist in deinem GitHub-Konto. Kein fremder Server.</p>
           <input type="password" autoComplete="off" placeholder="GitHub-Token (ghp_… oder github_pat_…)" value={token} onChange={e => setToken(e.target.value)} aria-label="GitHub-Token" />
-          <div className="form-row">
+          {!showReset && <div className="form-row">
             <input type="password" autoComplete="new-password" placeholder="Sync-Passwort (empfohlen)" value={pass} onChange={e => setPass(e.target.value)} aria-label="Sync-Passwort" />
             <input type="password" autoComplete="new-password" placeholder="Passwort wiederholen" value={pass2} onChange={e => setPass2(e.target.value)} aria-label="Sync-Passwort wiederholen" />
-          </div>
+          </div>}
+          {!showReset && <>
           <p className="shot-hint">Auf dem ersten Gerät legst du das Passwort fest, auf allen weiteren gibst du dasselbe ein (Wiederholung dort nicht nötig).</p>
           <button className="btn-primary" style={{ alignSelf: 'flex-start' }} onClick={connect} disabled={busy || !token.trim()}>{busy ? 'Verbinde …' : 'Verbinden'}</button>
+          </>}
+          {resetBox}
           <button type="button" className="btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowHelp(h => !h)} aria-expanded={showHelp}>
             <Icon name={showHelp ? 'ChevronUp' : 'ChevronDown'} size={14} /> So bekommst du einen Token
           </button>

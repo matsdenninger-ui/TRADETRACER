@@ -474,6 +474,41 @@ function App() {
     await runSyncRef.current(); // Screenshots mit dem neuen Schlüssel neu hochladen
   };
 
+  /* Passwort vergessen und kein Gerät mehr entsperrt: Sync mit neuem Passwort neu anlegen.
+     Der Stand dieses Geräts wird zum neuen Sync-Stand; das alte, unlesbare Gist wird überschrieben.
+     Andere Geräte behalten ihre Daten und führen sie nach Eingabe des neuen Passworts wieder zusammen. */
+  const resetSync = async (token, pass) => {
+    const cur = syncCfgRef.current;
+    const t = (token || cur?.token || '').trim();
+    if (!t) throw new Error('Bitte einen Token eingeben.');
+    while (syncBusyRef.current) await new Promise(r => setTimeout(r, 200));
+    syncBusyRef.current = true;
+    try {
+      const gistId = cur?.gistId && cur.token === t ? cur.gistId : (await findOrCreateGist(t)).id;
+      // Screenshots: lokal vorhandene werden mit dem neuen Schlüssel neu hochgeladen,
+      // die übrigen sind mit dem alten Passwort verschlüsselt und nicht mehr lesbar
+      const idx = {};
+      for (const [id, entry] of Object.entries(imagesRef.current || {})) {
+        if (entry.deleted) { idx[id] = entry; continue; }
+        if (await window.imageStore.get(id)) idx[id] = { ...entry, salt: 'reset', _u: Date.now() };
+        else if (entry.gist) await deleteImageGist(t, entry.gist).catch(() => {});
+      }
+      imagesRef.current = idx; save(IMAGES_INDEX_KEY, idx);
+      const salt = newSalt();
+      const key = await deriveSyncKey(pass, salt);
+      const snap = localSnapshot();
+      const body = { app: 'TradeTracer', version: 3, ...mergeSnapshots(snap, snap), syncedAt: new Date().toISOString() };
+      await ghApi(`/gists/${gistId}`, t, { method: 'PATCH', body: { files: { [GIST_FILE]: { content: await sealPayload(body, key, salt) } } } });
+      keyRef.current = null;
+      const cfg = { ...(cur || {}), token: t, gistId, enabled: true, lastSync: null, keyB64: await exportSyncKey(key), salt, encrypted: true };
+      syncCfgRef.current = cfg; setSyncCfg(cfg); saveSyncCfg(cfg);
+      setSyncState({ state: 'idle', at: null, error: null });
+    } finally {
+      syncBusyRef.current = false;
+    }
+    await runSyncRef.current(); // Screenshots mit dem neuen Schlüssel hochladen
+  };
+
   const unlockSync = async (pass) => {
     const cfg = syncCfgRef.current;
     const r = await keyFromPassphrase(cfg.token, cfg.gistId, pass);
@@ -752,7 +787,7 @@ function App() {
         <SettingsModal settings={settings} accounts={accounts} trades={trades}
           onSave={handleSaveSettings} onClose={() => setShowSettings(false)} onReset={handleReset}
           onExport={handleExportBackup} onImport={handleImportBackup}
-          sync={{ cfg: syncCfg, state: syncState, onConnect: connectSync, onDisconnect: disconnectSync, onUnlock: unlockSync, onReplaceToken: replaceToken, onChangePassword: changeSyncPassword, onSyncNow: () => runSyncRef.current() }} />
+          sync={{ cfg: syncCfg, state: syncState, onConnect: connectSync, onDisconnect: disconnectSync, onUnlock: unlockSync, onReplaceToken: replaceToken, onChangePassword: changeSyncPassword, onReset: resetSync, tradeCount: trades.length, onSyncNow: () => runSyncRef.current() }} />
       )}
 
       {mindsetDate && (
