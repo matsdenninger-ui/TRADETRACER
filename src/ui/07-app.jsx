@@ -780,7 +780,7 @@ function App() {
           onSave={handleSaveTrade} onClose={() => setModalTrade(undefined)} />
       )}
 
-      {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={handleImportTrades} accounts={accounts} defaultAccountId={defaultAccountId} existingIds={new Set(trades.map(t => t.id))} />}
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={handleImportTrades} accounts={accounts} defaultAccountId={defaultAccountId} existingTrades={trades} />}
 
       {showReport && (
         <ReportModal onClose={() => setShowReport(false)} trades={realizedTrades} mindset={mindset} plan={plan} currency={currency}

@@ -1074,7 +1074,13 @@ function MindsetCard({ entry, onChange, streak, date }) {
 /* (Kauf/Verkauf je Zeile, z.B. Broker-Export) → FIFO-Zusammenführung.     */
 /* ---------------------------------------------------------------------- */
 
-function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingIds = new Set() }) {
+function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingTrades = [] }) {
+  const existingIds = useMemo(() => new Set(existingTrades.map(t => t.id)), [existingTrades]);
+  const existingFps = useMemo(() => new Set(existingTrades.map(tradeFingerprint).filter(Boolean)), [existingTrades]);
+  const [aiKey, setAiKey] = useState(loadAiKey);
+  const [keyDraft, setKeyDraft] = useState('');
+  const shotInputRef = useRef(null);
+  const [shotBusy, setShotBusy] = useState(false);
   const [step, setStep] = useState('upload');
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState([]);
@@ -1154,10 +1160,55 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingId
     setBusy(false);
   };
 
+  /* Screenshots der MT5-Historie → Claude liest die Trades aus */
+  const handleShots = async (files) => {
+    const imgs = [...files].filter(f => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    if (!aiKey) { setParseError('Für das Auslesen von Screenshots brauchst du einen Anthropic-API-Schlüssel (siehe unten).'); return; }
+    setParseError(''); setShotBusy(true);
+    try {
+      const data = await Promise.all(imgs.slice(0, 10).map(f => compressImage(f, 2000, 0.9)));
+      const { Anthropic } = await ensureAnthropic();
+      const client = new Anthropic({ apiKey: aiKey, dangerouslyAllowBrowser: true });
+      const msg = await client.beta.messages.create({
+        model: AI_MODEL,
+        max_tokens: 16000,
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+        output_config: { format: { type: 'json_schema', schema: SHOT_IMPORT_SCHEMA } },
+        messages: [{
+          role: 'user',
+          content: [
+            ...data.map(d => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: d.slice(d.indexOf(',') + 1) } })),
+            { type: 'text', text: SHOT_IMPORT_PROMPT }
+          ]
+        }]
+      });
+      if (msg.stop_reason === 'refusal') throw new Error('Claude konnte die Screenshots nicht verarbeiten.');
+      const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      const rows = (JSON.parse(text).trades || []).filter(r => r.symbol && r.volume > 0);
+      const rep = rows.length ? reportFromShotRows(rows) : null;
+      if (!rep) throw new Error('Auf den Screenshots wurden keine vollständigen Trades gefunden. Nimm die Ansicht „Historie → Positionen“ und achte darauf, dass Kurse, Gewinn und Zeit zu sehen sind.');
+      setFileName(`${imgs.length} Screenshot${imgs.length === 1 ? '' : 's'}`);
+      setReport(rep); setMode('report');
+      // Konto mit den meisten MT5-Trades vorschlagen
+      const counts = {};
+      existingTrades.forEach(t => { if (/^(mt5|shot)_/.test(t.id)) counts[t.accountId] = (counts[t.accountId] || 0) + 1; });
+      const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+      setAccountId(best ? best[0] : defaultAccountId);
+      setStep('map');
+    } catch (e) {
+      const status = e && e.status;
+      setParseError(status === 401 ? 'Der API-Schlüssel ist ungültig.' : status === 429 ? 'Zu viele Anfragen – bitte kurz warten.' : (e.message || String(e)));
+    }
+    setShotBusy(false);
+  };
+
   const fields = mode === 'trades' ? IMPORT_FIELDS : EXEC_FIELDS;
   const requiredMissing = mode === 'report' ? [] : fields.filter(f => f.required && !(mapping[f.key] >= 0));
-  const reportNew = report ? report.trades.filter(t => !existingIds.has(t.id)) : [];
-  const newAccountName = report ? `${report.meta.broker} ${report.meta.accountNo || 'MT5'}`.trim() : '';
+  const isDup = (t) => existingIds.has(t.id) || existingFps.has(tradeFingerprint(t));
+  const reportNew = report ? report.trades.filter(t => !isDup(t)) : [];
+  const newAccountName = report ? (report.source === 'screenshot' ? 'MT5-Konto' : `${report.meta.broker} ${report.meta.accountNo || 'MT5'}`.trim()) : '';
 
   const preview = useMemo(() => {
     if (step !== 'map' || mode !== 'execs' || requiredMissing.length) return null;
@@ -1213,6 +1264,25 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingId
                 <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.html,.htm" style={{ display: 'none' }}
                   onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
               </div>
+              <div className="import-dropzone shot-zone" role="button" tabIndex={0} onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); handleShots(e.dataTransfer.files || []); }}
+                onClick={() => !shotBusy && shotInputRef.current?.click()}
+                onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && !shotBusy) { e.preventDefault(); shotInputRef.current?.click(); } }}>
+                {shotBusy ? <div className="loader" /> : <Icon name="Sparkles" size={26} strokeWidth={1.4} />}
+                <p><strong>{shotBusy ? 'Claude liest deine Trades …' : 'Screenshots aus MT5 auswählen'}</strong></p>
+                <span>Historie → Positionen, bis zu 10 Bilder. Claude liest die Trades aus, Doppelte werden übersprungen.</span>
+                <input ref={shotInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} aria-label="Screenshots auswählen"
+                  onChange={e => { handleShots(e.target.files || []); e.target.value = ''; }} />
+              </div>
+              {!aiKey && (
+                <div className="sync-enc">
+                  <p className="shot-hint">Für Screenshots brauchst du einen <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" className="txt-accent">Anthropic-API-Schlüssel</a> (derselbe wie für den KI-Coach, bleibt auf dem Gerät). Ein Screenshot kostet etwa 1–2 Cent.</p>
+                  <div className="chip-add">
+                    <input type="password" autoComplete="off" placeholder="sk-ant-…" value={keyDraft} onChange={e => setKeyDraft(e.target.value)} aria-label="Anthropic-API-Schlüssel" />
+                    <button className="btn-primary" disabled={!keyDraft.trim()} onClick={() => { saveAiKey(keyDraft.trim()); setAiKey(keyDraft.trim()); setKeyDraft(''); setParseError(''); }}>Speichern</button>
+                  </div>
+                </div>
+              )}
               {parseError && <div className="form-error"><Icon name="AlertTriangle" size={14} /> {parseError}</div>}
               <div className="import-help">
                 <strong>Broker-Exporte</strong>
@@ -1235,14 +1305,14 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingId
                 <div className="insight info">
                   <div className="insight-icon"><Icon name="FileSpreadsheet" size={16} /></div>
                   <div>
-                    <p className="insight-title">MetaTrader-5-Kontobericht erkannt</p>
-                    <p className="insight-text">{report.meta.company || report.meta.broker}{report.meta.accountNo ? ` · Konto ${report.meta.accountNo}` : ''}{report.meta.currencyCode ? ` · ${report.meta.currencyCode}` : ''}{report.meta.server ? ` · ${report.meta.server}` : ''}</p>
+                    <p className="insight-title">{report.source === 'screenshot' ? `${report.trades.length} Trade${report.trades.length === 1 ? '' : 's'} aus ${fileName} gelesen` : 'MetaTrader-5-Kontobericht erkannt'}</p>
+                    <p className="insight-text">{report.source === 'screenshot' ? 'Bitte kurz mit deiner MT5-App vergleichen – Claude liest sehr genau, aber nicht fehlerfrei.' : report.meta.company || report.meta.broker}{report.meta.accountNo ? ` · Konto ${report.meta.accountNo}` : ''}{report.meta.currencyCode ? ` · ${report.meta.currencyCode}` : ''}{report.meta.server ? ` · ${report.meta.server}` : ''}</p>
                   </div>
                 </div>
                 <div className="kv-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
                   <div className="kv"><span>Positionen</span><strong>{report.summary.count}</strong></div>
                   <div className="kv"><span>Zeitraum</span><strong>{fmtD(report.summary.from)} – {fmtD(report.summary.to)}</strong></div>
-                  <div className="kv"><span>Netto laut Broker</span><strong className={report.summary.net >= 0 ? 'txt-profit' : 'txt-loss'}>{fmtMoneySigned(report.summary.net, report.meta.currency || '')}</strong></div>
+                  <div className="kv"><span>{report.source === 'screenshot' ? 'Netto' : 'Netto laut Broker'}</span><strong className={report.summary.net >= 0 ? 'txt-profit' : 'txt-loss'}>{fmtMoneySigned(report.summary.net, report.meta.currency || '')}</strong></div>
                   <div className="kv"><span>Neu</span><strong>{reportNew.length}{report.trades.length - reportNew.length > 0 ? ` (${report.trades.length - reportNew.length} schon vorhanden)` : ''}</strong></div>
                 </div>
                 <p className="shot-hint">Symbole: {report.summary.symbols.map(([k, n]) => `${k} (${n})`).join(', ')}</p>
@@ -1254,9 +1324,29 @@ function ImportModal({ onClose, onImport, accounts, defaultAccountId, existingId
                     </select>
                   </label>
                 </div>
-                {accountId === '__new' && <p className="shot-hint">Das neue Konto bekommt die Währung {report.meta.currencyCode || '—'} und als Startkapital deine Ein- minus Auszahlungen{report.meta.netDeposits > 0 ? ` (${fmtMoney(report.meta.netDeposits, report.meta.currency || '')})` : ''}, damit der Kontostand zum MetaTrader passt – änderbar unter Einstellungen → Konten.</p>}
+                {accountId === '__new' && report.source !== 'screenshot' && <p className="shot-hint">Das neue Konto bekommt die Währung {report.meta.currencyCode || '—'} und als Startkapital deine Ein- minus Auszahlungen{report.meta.netDeposits > 0 ? ` (${fmtMoney(report.meta.netDeposits, report.meta.currency || '')})` : ''}, damit der Kontostand zum MetaTrader passt – änderbar unter Einstellungen → Konten.</p>}
                 {curMismatch && <div className="form-warning-box"><div className="form-warning-item"><Icon name="AlertTriangle" size={13} /> Der Bericht ist in {report.meta.currencyCode}, das Konto „{acc.name}“ in {accCur}. Gewinne werden in {report.meta.currencyCode} übernommen.</div></div>}
-                <p className="shot-hint">Gewinne, Swap und Kommission werden exakt wie im MetaTrader übernommen; der Punktwert je Trade wird daraus berechnet. S/L und T/P sind der letzte Stand der Position. Du kannst denselben Bericht später erneut importieren – bereits vorhandene Positionen werden übersprungen.</p>
+                <div className="table-wrap" style={{ maxHeight: 260, overflow: 'auto' }}>
+                  <table className="trade-table compact">
+                    <thead><tr><th>Geschlossen</th><th>Trade</th><th>Kurse</th><th>Ergebnis</th><th></th></tr></thead>
+                    <tbody>
+                      {[...report.trades].sort((a, b) => `${b.exitDate} ${b.exitTime}`.localeCompare(`${a.exitDate} ${a.exitTime}`)).slice(0, 60).map(t => {
+                        const pnl = calcPnL(t); const dup = isDup(t);
+                        return (
+                          <tr key={t.id} style={dup ? { opacity: 0.45 } : undefined}>
+                            <td className="muted nowrap">{fmtD(t.exitDate || t.date).slice(0, 6)} {t.exitTime}</td>
+                            <td className="nowrap">{t.symbol} <span className={t.direction === 'long' ? 'txt-profit' : 'txt-loss'}>{t.direction === 'long' ? 'L' : 'S'}</span> {t.quantity}</td>
+                            <td className="muted">{t.entryPrice} → {t.exitPrice ?? 'offen'}</td>
+                            <td className={`nowrap ${pnl >= 0 ? 'txt-profit' : 'txt-loss'}`}>{fmtNum(pnl, 2)}</td>
+                            <td className="muted">{dup ? 'schon da' : 'neu'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {report.source === 'screenshot' && <p className="shot-hint">Einstiegszeit, Stop-Loss und Take-Profit zeigt die MT5-App in der Liste nicht – du kannst sie beim Trade nachtragen. Kommt später der ganze MT5-Bericht, werden diese Trades dort als „schon da“ erkannt.</p>}
+                {report.source !== 'screenshot' && <p className="shot-hint">Gewinne, Swap und Kommission werden exakt wie im MetaTrader übernommen; der Punktwert je Trade wird daraus berechnet. S/L und T/P sind der letzte Stand der Position. Du kannst denselben Bericht später erneut importieren – bereits vorhandene Positionen werden übersprungen.</p>}
               </>
             );
           })()}

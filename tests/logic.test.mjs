@@ -245,3 +245,25 @@ test('Punktwert: Vorschlag aus bisherigen Trades und exakt aus dem Broker-Ergebn
   assert.ok(L.multiplierFromResult(t, 6.60).error);
   assert.deepEqual({ ...L.multiplierFromResult({ ...t, exitPrice: 4184.58 }, -0.4) }, { multiplier: null, fees: 0.4 });
 });
+
+test('Screenshot-Import: ausgelesene MT5-Zeilen werden zu Trades, Dubletten per Fingerabdruck erkannt', () => {
+  const row = (o) => ({ open_time: null, position: null, sl: null, tp: null, swap: null, commission: null, ...o });
+  const rows = [
+    row({ symbol: 'XAUUSD', side: 'buy', volume: 0.05, open_price: 4184.58, close_price: 4183.08, profit: -6.6, close_time: '2026.09.30 14:06:17' }),
+    row({ symbol: 'CL-OIL', side: 'buy', volume: 0.01, open_price: 90.158, close_price: 89.542, profit: -5.43, close_time: '2026.09.29 21:26:01' }),
+    row({ symbol: 'XAUUSD', side: 'buy', volume: 0.05, open_price: 4184.58, close_price: 4183.08, profit: -6.6, close_time: '2026.09.30 14:06:17' })
+  ];
+  const r = L.reportFromShotRows(rows);
+  assert.equal(r.trades.length, 2);
+  const gold = r.trades.find(t => t.symbol === 'XAUUSD');
+  assert.ok(gold.id.startsWith('shot_'));
+  assert.equal(gold.date, '2026-09-30');
+  assert.equal(gold.time, '');
+  assert.equal(gold.exitTime, '14:06');
+  assert.ok(Math.abs(L.calcPnL(gold) - -6.6) < 1e-6);
+  // gleiche ID bei erneutem Auslesen
+  assert.equal(L.reportFromShotRows([rows[0]]).trades[0].id, gold.id);
+  // derselbe Trade aus dem MT5-Bericht hat denselben Fingerabdruck
+  const fromReport = { symbol: 'XAUUSD', date: '2026-09-30', exitDate: '2026-09-30', exitTime: '14:06', quantity: 0.05, exitPrice: 4183.08 };
+  assert.equal(L.tradeFingerprint(gold), L.tradeFingerprint(fromReport));
+});
