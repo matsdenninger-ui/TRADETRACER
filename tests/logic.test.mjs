@@ -231,3 +231,17 @@ test('MetaTrader-5-Kontobericht: Positionen mit exaktem Broker-Ergebnis', () => 
   assert.ok(Math.abs(L.calcPnL(c) - (-0.4)) < 0.001);
   assert.equal(L.parseMt5Report([['Datum', 'Symbol'], ['2026-01-01', 'AAPL']]), null);
 });
+
+test('Punktwert: Vorschlag aus bisherigen Trades und exakt aus dem Broker-Ergebnis', () => {
+  const mk = (i, m, acc = 'v') => ({ id: 'x' + i, accountId: acc, symbol: 'XAUUSD', date: `2026-09-${String(10 + i).padStart(2, '0')}`, multiplier: m });
+  const trades = [mk(1, 87.9), mk(2, 88.1), mk(3, 88.4), mk(4, 100, 'other')];
+  assert.equal(L.suggestMultiplier(trades, 'xauusd', 'v').value, 88.1);
+  assert.equal(L.suggestMultiplier(trades, 'XAUUSD', 'neu').value, 88.4); // kein eigenes Konto → alle Konten
+  assert.equal(L.suggestMultiplier(trades, 'EURUSD', 'v'), null);
+  // XAUUSD buy 0.05 4184.58 → 4183.08 = −6.60 € laut Vantage
+  const t = { direction: 'long', entryPrice: 4184.58, exitPrice: 4183.08, quantity: 0.05, fees: 0 };
+  const r = L.multiplierFromResult(t, -6.60);
+  assert.ok(Math.abs(L.calcPnL({ ...t, multiplier: r.multiplier }) - -6.60) < 1e-6);
+  assert.ok(L.multiplierFromResult(t, 6.60).error);
+  assert.deepEqual({ ...L.multiplierFromResult({ ...t, exitPrice: 4184.58 }, -0.4) }, { multiplier: null, fees: 0.4 });
+});

@@ -35,21 +35,23 @@ function LegsEditor({ legs, onChange, direction, defaultDate }) {
   );
 }
 
-function MultiplierField({ value, onChange }) {
+function MultiplierField({ value, onChange, hint }) {
   const preset = MULTIPLIER_PRESETS.find(p => p.value === Number(value));
-  const [custom, setCustom] = useState(!preset);
+  const [wantCustom, setCustom] = useState(false);
+  const custom = wantCustom || !preset;
   return (
     <label>Multiplikator / Punktwert
       <div className="chip-add">
-        <select value={custom ? 'custom' : String(value)} onChange={e => {
+        <select style={{ flex: 1, minWidth: 0 }} value={custom ? 'custom' : String(value)} onChange={e => {
           if (e.target.value === 'custom') { setCustom(true); return; }
           setCustom(false); onChange(Number(e.target.value));
         }}>
           {MULTIPLIER_PRESETS.map(p => <option key={p.label} value={p.value}>{p.label}</option>)}
           <option value="custom">Eigener Wert …</option>
         </select>
-        {custom && <input type="number" step="any" min="0" value={value} onChange={e => onChange(e.target.value)} style={{ maxWidth: 110 }} aria-label="Eigener Multiplikator" />}
+        {custom && <input type="number" step="any" min="0" value={value} onChange={e => onChange(e.target.value)} style={{ flex: '0 0 104px', minWidth: 0 }} aria-label="Eigener Multiplikator" />}
       </div>
+      {hint && <span className="field-hint">{hint}</span>}
     </label>
   );
 }
@@ -80,6 +82,7 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
   const [override, setOverride] = useState(false);
   const [ack, setAck] = useState(false);
   const multTouched = useRef(!!initial);
+  const [brokerResult, setBrokerResult] = useState('');
   const fileRef = useRef(null);
   const symbolRef = useRef(null);
   const currency = currencyFor(form.accountId);
@@ -95,10 +98,10 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
   const onSymbol = (v) => {
     set('symbol', v);
     if (multTouched.current) return;
-    const sym = v.trim().toUpperCase();
-    const prev = [...trades].reverse().find(t => t.symbol === sym && tradeMultiplier(t) !== 1);
-    set('multiplier', prev ? tradeMultiplier(prev) : 1);
+    const sug = suggestMultiplier(trades, v, form.accountId);
+    set('multiplier', sug ? sug.value : 1);
   };
+  const multSuggestion = useMemo(() => suggestMultiplier(trades, form.symbol, form.accountId), [trades, form.symbol, form.accountId]);
 
   const toggleLegs = () => {
     if (legsMode) {
@@ -117,8 +120,16 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
       fees: num(form.fees) || 0, stopLoss: num(form.stopLoss), takeProfit: num(form.takeProfit), multiplier: Number(form.multiplier) || 1,
       date: form.date, time: form.time, exitDate: form.exitDate, exitTime: form.exitTime, exitQuantity: null, legs: null
     };
-    return legsMode ? applyLegs({ ...d, legs: form.legs }) : d;
-  }, [form, legsMode]);
+    const out = legsMode ? applyLegs({ ...d, legs: form.legs }) : d;
+    // Ergebnis laut Broker eingetragen → Punktwert (bzw. Kosten) exakt daraus ableiten
+    if (brokerResult !== '' && Number.isFinite(Number(brokerResult)) && isRealized(out)) {
+      const r = multiplierFromResult(out, Number(brokerResult));
+      if (r?.error) return { ...out, _resultError: r.error };
+      if (r?.multiplier) return { ...out, multiplier: r.multiplier, _fromResult: true };
+      if (r) return { ...out, fees: r.fees, _fromResult: true };
+    }
+    return out;
+  }, [form, legsMode, brokerResult]);
   const realized = isRealized(draft);
   const preview = draft.entryPrice && draft.quantity && realized ? calcPnL(draft) : null;
   const rMultiple = preview != null ? calcRMultiple(draft) : null;
@@ -182,6 +193,7 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
       if (form.status === 'closed' && form.exitPrice === '') return setError('Bitte einen Ausstiegskurs angeben – oder „Position offen“ wählen.');
     }
     if (!(Number(form.multiplier) > 0)) return setError('Der Multiplikator muss größer als 0 sein.');
+    if (draft._resultError) return setError(draft._resultError);
     setError('');
     setSaving(true);
     try {
@@ -207,8 +219,8 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
       stopLoss: form.stopLoss !== '' ? Number(form.stopLoss) : null,
       takeProfit: form.takeProfit !== '' ? Number(form.takeProfit) : null,
       quantity: Number(form.quantity),
-      multiplier: Number(form.multiplier) || 1,
-      fees: Number(form.fees) || 0,
+      multiplier: draft._fromResult ? draft.multiplier : (Number(form.multiplier) || 1),
+      fees: draft._fromResult ? draft.fees : (Number(form.fees) || 0),
       strategy: form.strategy.trim(),
       notes: form.notes.trim(),
       onPlan: brokeLock ? false : !!form.onPlan,
@@ -340,7 +352,17 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
               <input type="number" step="any" inputMode="decimal" placeholder="0.00" value={form.fees} onChange={e => set('fees', e.target.value)} />
             </label>
           </div>
-          <MultiplierField value={form.multiplier} onChange={v => { multTouched.current = true; set('multiplier', v); }} />
+          <div className="form-row">
+            <MultiplierField value={draft._fromResult && draft.multiplier ? draft.multiplier : form.multiplier} onChange={v => { multTouched.current = true; setBrokerResult(''); set('multiplier', v); }}
+              hint={draft._fromResult ? `Aus dem Broker-Ergebnis berechnet (${fmtNum(draft.multiplier, 2)} ${currency} je Lot und Preispunkt)`
+                : multSuggestion ? `Aus deinen letzten ${multSuggestion.count} ${form.symbol.trim().toUpperCase()}-Trades: ${fmtNum(multSuggestion.value, 2)} ${currency} je Lot und Preispunkt` : null} />
+            <label>Ergebnis laut Broker ({currency}) <span className="label-optional">optional</span>
+              <input type="number" step="any" inputMode="decimal" placeholder={form.status === 'open' ? 'erst nach dem Schließen' : 'z.B. -6.60'} value={brokerResult}
+                disabled={form.status === 'open'} onChange={e => setBrokerResult(e.target.value)} aria-label="Ergebnis laut Broker" />
+              <span className="field-hint">Für CFDs/Forex: trag den Gewinn aus MT5 ein, dann stimmt das Ergebnis auf den Cent (Wechselkurs, Kontraktgröße).</span>
+            </label>
+          </div>
+          {draft._resultError && <div className="form-warning-box"><div className="form-warning-item"><Icon name="AlertTriangle" size={13} /> {draft._resultError}</div></div>}
 
           <div className="pnl-preview">
             <div><span>{stillOpen && realized ? 'Realisiert' : 'Ergebnis'}</span><strong className={preview == null ? '' : preview >= 0 ? 'txt-profit' : 'txt-loss'}>{preview == null ? (stillOpen ? 'offen' : '—') : fmtMoneySigned(preview, currency)}</strong></div>

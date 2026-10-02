@@ -26,6 +26,30 @@ function tradeMultiplier(t) {
   return m > 0 ? m : 1;
 }
 
+/* Punktwert-Vorschlag aus den bisherigen Trades eines Symbols (Median der letzten 30,
+   bevorzugt aus demselben Konto). Bei CFDs in Euro schwankt er leicht mit dem Wechselkurs. */
+function suggestMultiplier(trades, symbol, accountId) {
+  const sym = String(symbol || '').trim().toUpperCase();
+  if (!sym) return null;
+  const same = trades.filter(t => t.symbol === sym && tradeMultiplier(t) !== 1);
+  const pool = same.filter(t => t.accountId === accountId).length ? same.filter(t => t.accountId === accountId) : same;
+  if (!pool.length) return null;
+  const recent = [...pool].sort((a, b) => `${a.date} ${a.time || ''}`.localeCompare(`${b.date} ${b.time || ''}`)).slice(-30).map(tradeMultiplier).sort((a, b) => a - b);
+  const m = recent[Math.floor(recent.length / 2)];
+  return { value: m >= 10 ? Math.round(m * 100) / 100 : Number(m.toPrecision(6)), count: recent.length };
+}
+
+/* Leitet aus dem tatsächlichen Ergebnis laut Broker den exakten Punktwert ab.
+   Ergebnis = Kursbewegung × Menge × Punktwert − Gebühren  →  Punktwert = (Ergebnis + Gebühren) / (Bewegung × Menge) */
+function multiplierFromResult(t, result) {
+  const q = closedQty(t);
+  if (!(q > 0) || !Number.isFinite(result)) return null;
+  const move = (t.direction === 'long' ? t.exitPrice - t.entryPrice : t.entryPrice - t.exitPrice) * q;
+  if (Math.abs(move) < 1e-12) return { multiplier: null, fees: -result }; // keine Kursbewegung: Ergebnis = nur Kosten/Swap
+  const m = (result + (Number(t.fees) || 0)) / move;
+  return m > 0 ? { multiplier: Number(m.toPrecision(8)) } : { error: 'Das Ergebnis passt nicht zu Richtung und Kursen – Gewinn und Verlust vertauscht oder Long/Short falsch?' };
+}
+
 /* ---------------------------------------------------------------------- */
 /* Offene Positionen, Teilverkäufe und Nachkäufe                           */
 /* Ein Trade kann aus mehreren Ausführungen ("legs") bestehen:             */
