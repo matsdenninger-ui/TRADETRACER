@@ -102,6 +102,12 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
     set('multiplier', sug ? sug.value : 1);
   };
   const multSuggestion = useMemo(() => suggestMultiplier(trades, form.symbol, form.accountId), [trades, form.symbol, form.accountId]);
+  const knownSymbols = useMemo(() => [...new Set(trades.map(t => t.symbol).filter(Boolean))].sort(), [trades]);
+  // "xau" / "Gold" → so schreiben wie in deinen bisherigen Trades (z.B. XAUUSD), damit die Auswertung nach Symbol stimmt
+  const onSymbolBlur = () => {
+    const typed = form.symbol.trim().toUpperCase();
+    if (typed && multSuggestion && multSuggestion.symbol !== typed && sameInstrument(typed, multSuggestion.symbol)) set('symbol', multSuggestion.symbol);
+  };
 
   const toggleLegs = () => {
     if (legsMode) {
@@ -220,6 +226,7 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
       takeProfit: form.takeProfit !== '' ? Number(form.takeProfit) : null,
       quantity: Number(form.quantity),
       multiplier: draft._fromResult ? draft.multiplier : (Number(form.multiplier) || 1),
+      multSource: draft._fromResult ? 'broker' : (initial && Number(form.multiplier) === tradeMultiplier(initial) ? (initial.multSource || null) : null),
       fees: draft._fromResult ? draft.fees : (Number(form.fees) || 0),
       strategy: form.strategy.trim(),
       notes: form.notes.trim(),
@@ -279,7 +286,8 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
           {override && <div className="form-error"><Icon name="AlertTriangle" size={14} /> Tageslimit überschritten – dieser Trade wird als Regelbruch gespeichert.</div>}
           <div className="form-row">
             <label>Symbol
-              <input ref={symbolRef} type="text" placeholder="z.B. AAPL, ES, EURUSD" value={form.symbol} onChange={e => onSymbol(e.target.value)} autoCapitalize="characters" />
+              <input ref={symbolRef} type="text" placeholder="z.B. AAPL, ES, EURUSD" value={form.symbol} onChange={e => onSymbol(e.target.value)} onBlur={onSymbolBlur} autoCapitalize="characters" list="symbol-list" />
+              <datalist id="symbol-list">{knownSymbols.map(sym => <option key={sym} value={sym} />)}</datalist>
             </label>
             {accounts.length > 1 ? (
               <label>Konto
@@ -355,7 +363,9 @@ function TradeForm({ initial, template, onSave, onClose, currencyFor, strategyTa
           <div className="form-row">
             <MultiplierField value={draft._fromResult && draft.multiplier ? draft.multiplier : form.multiplier} onChange={v => { multTouched.current = true; setBrokerResult(''); set('multiplier', v); }}
               hint={draft._fromResult ? `Aus dem Broker-Ergebnis berechnet (${fmtNum(draft.multiplier, 2)} ${currency} je Lot und Preispunkt)`
-                : multSuggestion ? `Aus deinen letzten ${multSuggestion.count} ${form.symbol.trim().toUpperCase()}-Trades: ${fmtNum(multSuggestion.value, 2)} ${currency} je Lot und Preispunkt` : null} />
+                : multSuggestion ? (multSuggestion.fromBroker
+                  ? `Aus ${multSuggestion.count} ${multSuggestion.symbol}-Trades laut Broker: ${fmtNum(multSuggestion.value, 2)} ${currency} je Lot und Preispunkt`
+                  : `Von deinen selbst eingetragenen ${multSuggestion.symbol}-Trades (${fmtNum(multSuggestion.value, 2)}) – unsicher. Trag das Ergebnis laut Broker ein, dann stimmt es.`) : null} />
             <label>Ergebnis laut Broker ({currency}) <span className="label-optional">optional</span>
               <input type="number" step="any" inputMode="decimal" placeholder={form.status === 'open' ? 'erst nach dem Schließen' : 'z.B. -6.60'} value={brokerResult}
                 disabled={form.status === 'open'} onChange={e => setBrokerResult(e.target.value)} aria-label="Ergebnis laut Broker" />
@@ -491,7 +501,7 @@ function PriceLadder({ trade }) {
   );
 }
 
-function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDuplicate }) {
+function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDuplicate, allTrades = [], onUpdate }) {
   const [lightbox, setLightbox] = useState(null);
   const dialogRef = useDialog(onClose);
   const pnl = calcPnL(trade);
@@ -504,6 +514,13 @@ function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDu
   const retPct = cq > 0 ? (pnl / (trade.entryPrice * cq * tradeMultiplier(trade))) * 100 : null;
   const open = isOpen(trade);
   const mult = tradeMultiplier(trade);
+  // Selbst eingetragener Punktwert, der deutlich von den Broker-Werten desselben Instruments abweicht?
+  const multFix = useMemo(() => {
+    if (hasBrokerMultiplier(trade) || !onUpdate) return null;
+    const sug = suggestMultiplier(allTrades.filter(t => t.id !== trade.id), trade.symbol, trade.accountId);
+    if (!sug || !sug.fromBroker || Math.abs(mult - sug.value) / sug.value < 0.03) return null;
+    return sug;
+  }, [trade, allTrades, mult, onUpdate]);
 
   return (
     <>
@@ -531,10 +548,20 @@ function TradeDetail({ trade, account, currency, onClose, onEdit, onDelete, onDu
           </div>
         </div>
         <div className="drawer-body">
+          {multFix && (
+            <div className="insight bad" style={{ marginBottom: 14 }}>
+              <div className="insight-icon"><Icon name="AlertTriangle" size={16} /></div>
+              <div style={{ flex: 1 }}>
+                <p className="insight-title">Punktwert passt nicht zu deinen Broker-Daten</p>
+                <p className="insight-text">Eingetragen ist {fmtNum(mult, 2)}, deine {multFix.symbol}-Trades laut Broker haben {fmtNum(multFix.value, 2)} {currency} je Lot und Preispunkt. Mit dem richtigen Wert wäre das Ergebnis {fmtMoneySigned(calcPnL({ ...trade, multiplier: multFix.value }), currency)}.</p>
+                <button className="btn-primary" style={{ marginTop: 8 }} onClick={() => onUpdate({ ...trade, multiplier: multFix.value, symbol: sameInstrument(trade.symbol, multFix.symbol) ? multFix.symbol : trade.symbol })}>Auf {fmtNum(multFix.value, 2)} korrigieren</button>
+              </div>
+            </div>
+          )}
           <PriceLadder trade={trade} />
           <div className="kv-grid">
             <div className="kv"><span>Einstieg</span><strong>{trade.entryPrice}</strong></div>
-            <div className="kv"><span>Ausstieg</span><strong>{hasExit(trade) ? fmtNum(Number(trade.exitPrice), 4).replace(/,?0+$/, '') : 'offen'}</strong></div>
+            <div className="kv"><span>Ausstieg</span><strong>{hasExit(trade) ? Number(Number(trade.exitPrice).toFixed(6)) : 'offen'}</strong></div>
             <div className="kv"><span>Menge</span><strong>{trade.quantity}{open && isRealized(trade) ? ` (${fmtNum(openQty(trade), 2)} offen)` : ''}</strong></div>
             <div className="kv"><span>Stop-Loss</span><strong>{trade.stopLoss ?? '—'}</strong></div>
             <div className="kv"><span>Take-Profit</span><strong>{trade.takeProfit ?? '—'}</strong></div>

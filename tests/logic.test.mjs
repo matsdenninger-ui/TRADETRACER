@@ -267,3 +267,17 @@ test('Screenshot-Import: ausgelesene MT5-Zeilen werden zu Trades, Dubletten per 
   const fromReport = { symbol: 'XAUUSD', date: '2026-09-30', exitDate: '2026-09-30', exitTime: '14:06', quantity: 0.05, exitPrice: 4183.08 };
   assert.equal(L.tradeFingerprint(gold), L.tradeFingerprint(fromReport));
 });
+
+test('Punktwert-Vorschlag: XAU findet XAUUSD, Broker-Werte schlagen selbst eingetragene', () => {
+  const broker = Array.from({ length: 5 }, (_, i) => ({ id: `mt5_${i}`, accountId: 'v', symbol: 'XAUUSD', date: `2026-09-1${i}`, multiplier: 88 + i * 0.1 }));
+  const manual = { id: 't_x', accountId: 'v', symbol: 'XAU', date: '2026-10-01', multiplier: 100 };
+  const s = L.suggestMultiplier([...broker, manual], 'xau', 'v');
+  assert.equal(s.value, 88.2);
+  assert.equal(s.symbol, 'XAUUSD');
+  assert.equal(s.fromBroker, true);
+  assert.equal(L.suggestMultiplier([...broker, manual], 'Gold', 'v').symbol, 'XAUUSD');
+  assert.equal(L.suggestMultiplier([manual], 'XAU', 'v').fromBroker, false);
+  assert.ok(L.sameInstrument('XAUUSD.r', 'xauusd'));
+  assert.ok(!L.sameInstrument('EURUSD', 'GBPUSD'));
+  assert.equal(L.suggestMultiplier([...broker], 'EURUSD', 'v'), null);
+});

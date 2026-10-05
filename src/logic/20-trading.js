@@ -26,17 +26,45 @@ function tradeMultiplier(t) {
   return m > 0 ? m : 1;
 }
 
-/* Punktwert-Vorschlag aus den bisherigen Trades eines Symbols (Median der letzten 30,
-   bevorzugt aus demselben Konto). Bei CFDs in Euro schwankt er leicht mit dem Wechselkurs. */
+/* Symbole vergleichbar machen: "xau", "XAUUSD.r", "Gold" → gleiche Gruppe */
+const SYMBOL_ALIASES = { GOLD: 'XAUUSD', XAU: 'XAUUSD', SILVER: 'XAGUSD', SILBER: 'XAGUSD', XAG: 'XAGUSD', OIL: 'CLOIL', WTI: 'CLOIL', USOIL: 'CLOIL', BTC: 'BTCUSD', BITCOIN: 'BTCUSD' };
+function symbolKey(symbol) {
+  const k = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return SYMBOL_ALIASES[k] || k;
+}
+function sameInstrument(a, b) {
+  const x = symbolKey(a), y = symbolKey(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  // Broker-Suffixe wie XAUUSDm / XAUUSDpro und Abkürzungen wie XAU ↔ XAUUSD
+  return Math.min(x.length, y.length) >= 3 && (x.startsWith(y) || y.startsWith(x));
+}
+/* Punktwert stammt vom Broker (Import, Screenshot oder "Ergebnis laut Broker") */
+function hasBrokerMultiplier(t) {
+  return /^(mt5|shot)_/.test(String(t.id || '')) || t.multSource === 'broker';
+}
+
+/* Punktwert-Vorschlag aus den bisherigen Trades desselben Instruments (Median der letzten 10 – nah am aktuellen Wechselkurs).
+   Vom Broker abgeleitete Werte haben Vorrang vor selbst eingetippten, dasselbe Konto vor anderen. */
 function suggestMultiplier(trades, symbol, accountId) {
-  const sym = String(symbol || '').trim().toUpperCase();
-  if (!sym) return null;
-  const same = trades.filter(t => t.symbol === sym && tradeMultiplier(t) !== 1);
-  const pool = same.filter(t => t.accountId === accountId).length ? same.filter(t => t.accountId === accountId) : same;
-  if (!pool.length) return null;
-  const recent = [...pool].sort((a, b) => `${a.date} ${a.time || ''}`.localeCompare(`${b.date} ${b.time || ''}`)).slice(-30).map(tradeMultiplier).sort((a, b) => a - b);
+  if (!String(symbol || '').trim()) return null;
+  const related = trades.filter(t => tradeMultiplier(t) !== 1 && sameInstrument(t.symbol, symbol));
+  if (!related.length) return null;
+  const tiers = [
+    t => hasBrokerMultiplier(t) && t.accountId === accountId,
+    t => hasBrokerMultiplier(t),
+    t => t.accountId === accountId,
+    () => true
+  ];
+  let pool = [];
+  for (const f of tiers) { pool = related.filter(f); if (pool.length) break; }
+  const recentTrades = [...pool].sort((a, b) => `${a.exitDate || a.date} ${a.exitTime || a.time || ''}`.localeCompare(`${b.exitDate || b.date} ${b.exitTime || b.time || ''}`)).slice(-10);
+  const recent = recentTrades.map(tradeMultiplier).sort((a, b) => a - b);
   const m = recent[Math.floor(recent.length / 2)];
-  return { value: m >= 10 ? Math.round(m * 100) / 100 : Number(m.toPrecision(6)), count: recent.length };
+  const counts = {};
+  recentTrades.forEach(t => { counts[t.symbol] = (counts[t.symbol] || 0) + 1; });
+  const canonical = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  return { value: m >= 10 ? Math.round(m * 100) / 100 : Number(m.toPrecision(6)), count: recent.length, symbol: canonical, fromBroker: hasBrokerMultiplier(recentTrades[0]) };
 }
 
 /* Leitet aus dem tatsächlichen Ergebnis laut Broker den exakten Punktwert ab.

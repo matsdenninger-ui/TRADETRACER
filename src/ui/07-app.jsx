@@ -768,7 +768,8 @@ function App() {
       {detailTrade && (
         <TradeDetail trade={detailTrade} account={accounts.length > 1 ? accountsById[detailTrade.accountId] : null} currency={currencyFor(detailTrade.accountId)}
           onClose={() => setDetailId(null)} onEdit={(t) => { setDetailId(null); setModalTrade(t); }}
-          onDelete={handleDelete} onDuplicate={handleDuplicate} />
+          onDelete={handleDelete} onDuplicate={handleDuplicate} allTrades={trades}
+          onUpdate={(t) => persistTrades(trades.map(x => x.id === t.id ? t : x))} />
       )}
 
       {modalTrade !== undefined && (

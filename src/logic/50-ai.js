@@ -67,6 +67,7 @@ const SHOT_IMPORT_PROMPT = `Die Bilder sind Screenshots aus der Trade-Historie v
 Lies jede vollständig sichtbare geschlossene Position aus. Eine Position sieht z.B. so aus:
 "XAUUSD buy 0.05" / "4184.58 → 4183.08" / rechts "-6.60" und "2026.09.30 14:06:17".
 Dabei ist der erste Kurs der Einstieg, der zweite der Ausstieg, die Zahl rechts oben der Gewinn in Kontowährung und die Zeit die Schließzeit.
+Ist eine Position aufgeklappt (Detailansicht), stehen dort zusätzlich Eröffnungs- und Schließzeit ("2026.10.02 10:39:08 → 2026.10.02 10:40:54"), S/L, T/P, Swap und Kommission – diese Werte dann mit übernehmen ("-" bedeutet 0 bzw. kein Wert). Ist in der Detailansicht das Symbol oder die Richtung/Volumen nicht zu sehen, die Position weglassen.
 Regeln:
 - Nur Positionen aufnehmen, deren Symbol, Richtung, Volumen, beide Kurse, Gewinn und Zeit vollständig und sicher lesbar sind. Teilweise verdeckte oder abgeschnittene Zeilen (z.B. hinter Menüleisten oder am Bildrand) weglassen.
 - Zahlen genau so übernehmen, wie sie dastehen (Leerzeichen als Tausendertrenner entfernen, Punkt ist das Dezimalzeichen, Minus beachten).
